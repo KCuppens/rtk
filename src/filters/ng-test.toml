@@ -1,0 +1,70 @@
+[filters.ng-test]
+description = "Compact Angular/Karma test output — strip browser/build noise, keep results and failures"
+match_command = "^(pnpm\\s+|yarn\\s+|npm\\s+run\\s+)?ng\\s+test\\b"
+strip_ansi = true
+strip_lines_matching = [
+  "^\\s*$",
+  "^\\s*\\d+%\\s+",
+  "^INFO\\s+\\[karma-server\\]",
+  "^INFO\\s+\\[karma\\]",
+  "^INFO\\s+\\[launcher\\]",
+  "^INFO\\s+\\[Chrome",
+  "^INFO\\s+\\[Firefox",
+  "^INFO\\s+\\[Safari",
+  "^INFO\\s+\\[HeadlessChrome",
+  "^INFO\\s+\\[preprocess\\.",
+  "^INFO\\s+\\[compiler\\.",
+  "^-\\s+Generating browser application bundles",
+  "^-\\s+Building",
+  "^-\\s+Bundling",
+  "^-\\s+Copying assets",
+  "^-\\s+Compiling",
+  "^-\\s+Generating index html",
+  "^\\s*✔ Browser application bundle generation complete",
+  "^\\s*✔ Compiled successfully",
+  "^Warning:.*Buildable libraries",
+  # Strip per-run progress lines; the TOTAL summary carries the definitive result.
+  # Keep lines that contain FAILED so failures are always visible.
+  "^\\S[^:]*: Executed \\d+ of \\d+ SUCCESS \\(\\d+\\.\\d+ secs / \\d+\\.\\d+ secs\\)$",
+]
+truncate_lines_at = 200
+max_lines = 80
+on_empty = "ng test: ok"
+
+[[tests.ng-test]]
+name = "strips karma info and progress, keeps final TOTAL"
+input = """
+INFO [karma-server]: Karma v6.4.2 server started at http://localhost:9876/
+INFO [launcher]: Launching browsers ChromeHeadless
+INFO [launcher]: Starting browser ChromeHeadless
+INFO [Chrome Headless 120.0.6099.71 (Linux x86_64)]: Connected on socket abc
+Chrome Headless 120.0.6099.71 (Linux x86_64): Executed 10 of 55 SUCCESS (0.123 secs / 0.089 secs)
+Chrome Headless 120.0.6099.71 (Linux x86_64): Executed 55 of 55 SUCCESS (2.345 secs / 1.234 secs)
+TOTAL: 55 SUCCESS
+"""
+expected = "TOTAL: 55 SUCCESS"
+
+[[tests.ng-test]]
+name = "preserves test failures"
+input = """
+INFO [karma-server]: Karma v6.4.2 server started at http://localhost:9876/
+Chrome Headless 120.0.6099.71 (Linux x86_64) MyComponent should render title FAILED
+	Expected 'Hello' to equal 'World'.
+	    at UserContext.<anonymous> (src/app/my.component.spec.ts:15:32)
+Chrome Headless 120.0.6099.71 (Linux x86_64): Executed 55 of 55 (1 FAILED) (2.345 secs / 1.234 secs)
+TOTAL: 1 FAILED, 54 SUCCESS
+"""
+expected = "Chrome Headless 120.0.6099.71 (Linux x86_64) MyComponent should render title FAILED\n\tExpected 'Hello' to equal 'World'.\n\t    at UserContext.<anonymous> (src/app/my.component.spec.ts:15:32)\nChrome Headless 120.0.6099.71 (Linux x86_64): Executed 55 of 55 (1 FAILED) (2.345 secs / 1.234 secs)\nTOTAL: 1 FAILED, 54 SUCCESS"
+
+[[tests.ng-test]]
+name = "strips Angular build progress, keeps compile success"
+input = """
+- Generating browser application bundles (phase: setup)...
+- Building...
+- Bundling...
+✔ Browser application bundle generation complete.
+✔ Compiled successfully.
+INFO [karma-server]: Karma v6.4.2 server started
+TOTAL: 12 SUCCESS
+"""
+expected = "TOTAL: 12 SUCCESS"
