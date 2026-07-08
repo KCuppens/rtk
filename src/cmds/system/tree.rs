@@ -166,4 +166,20 @@ mod tests {
         assert!(NOISE_DIRS.contains(&"dist"));
         assert!(NOISE_DIRS.contains(&"build"));
     }
+
+    // --- Structural test: filter_tree_output preserves the tree body and
+    //     strips the summary line. Not a % savings filter — noise directories
+    //     are dropped by the caller (excludes at tree invocation time).
+
+    #[test]
+    fn test_tree_structure_summary_stripped() {
+        let input = ".\n├── src\n│   └── main.rs\n├── tests\n│   └── it.rs\n└── Cargo.toml\n\n\
+                     3 directories, 4 files\n";
+        let output = filter_tree_output(input);
+        assert!(!output.contains("directories"));
+        assert!(!output.contains("files"));
+        assert!(output.contains("main.rs"));
+        assert!(output.contains("it.rs"));
+        assert!(output.contains("Cargo.toml"));
+    }
 }
