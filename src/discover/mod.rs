@@ -79,8 +79,13 @@ pub fn run(
     let mut rtk_disabled_cmds: HashMap<String, usize> = HashMap::new();
     let mut supported_map: HashMap<&'static str, SupportedBucket> = HashMap::new();
     let mut unsupported_map: HashMap<String, UnsupportedBucket> = HashMap::new();
+    // #2863: sum WebFetch/WebSearch usage across sessions.
+    let mut web_tool_usage = crate::discover::provider::WebToolUsage::default();
 
     for session_path in &sessions {
+        if let Ok(u) = provider.extract_web_tool_usage(session_path) {
+            web_tool_usage.merge(&u);
+        }
         let extracted = match provider.extract_commands(session_path) {
             Ok(cmds) => cmds,
             Err(e) => {
@@ -264,6 +269,7 @@ pub fn run(
         rtk_disabled_count,
         rtk_disabled_examples,
         agent_status: report::AgentIntegrationStatus::detect(),
+        unreachable_web_tools: web_tool_usage,
     };
 
     match format {
