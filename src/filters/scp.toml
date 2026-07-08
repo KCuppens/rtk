@@ -1,0 +1,46 @@
+[filters.scp]
+description = "Compact scp output — strip verbose/debug chatter, keep transfer results"
+match_command = "^scp\\b"
+strip_ansi = true
+strip_lines_matching = [
+  "^\\s*$",
+  "^debug\\d+:",
+  "^OpenSSH_",
+  "^Executing: program",
+  "^Authenticated to ",
+  "^Transferred: sent ",
+  "^Bytes per second: ",
+  "^Connection closed",
+  "^Warning: Permanently added",
+  "^Enter passphrase",
+]
+truncate_lines_at = 200
+max_lines = 100
+on_empty = "scp: ok"
+
+[[tests.scp]]
+name = "strips debug and openssh banner, keeps transfer lines"
+input = """
+Executing: program /usr/bin/ssh host user, command scp -v -t /tmp/dest
+OpenSSH_8.9p1, LibreSSL 3.3.6
+debug1: Reading configuration data /etc/ssh/ssh_config
+debug1: Connecting to example.com port 22.
+debug1: Authenticating to example.com:22 as 'user'
+foo.txt                                        100% 1234    12.3KB/s   00:00
+bar.tgz                                        100%   56MB   50.0MB/s   00:01
+debug1: Exit status 0
+"""
+expected = "foo.txt                                        100% 1234    12.3KB/s   00:00\nbar.tgz                                        100%   56MB   50.0MB/s   00:01"
+
+[[tests.scp]]
+name = "quiet transfer produces no output"
+input = ""
+expected = "scp: ok"
+
+[[tests.scp]]
+name = "preserves errors"
+input = """
+debug1: Connecting to example.com port 22.
+scp: /tmp/dest/foo.txt: Permission denied
+"""
+expected = "scp: /tmp/dest/foo.txt: Permission denied"

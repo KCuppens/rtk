@@ -1896,8 +1896,8 @@ match_command = "^make\\b"
         let filters = make_filters(BUILTIN_TOML);
         assert_eq!(
             filters.len(),
-            65,
-            "Expected exactly 65 built-in filters, got {}. \
+            66,
+            "Expected exactly 66 built-in filters, got {}. \
              Update this count when adding/removing filters in src/filters/.",
             filters.len()
         );
@@ -1954,11 +1954,11 @@ expected = "output line 1\noutput line 2"
         let combined = format!("{}\n\n{}", BUILTIN_TOML, new_filter);
         let filters = make_filters(&combined);
 
-        // All 65 existing filters still present + 1 new = 66
+        // All 66 existing filters still present + 1 new = 67
         assert_eq!(
             filters.len(),
-            66,
-            "Expected 66 filters after concat (65 built-in + 1 new)"
+            67,
+            "Expected 67 filters after concat (66 built-in + 1 new)"
         );
 
         // New filter is discoverable
