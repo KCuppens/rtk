@@ -8,6 +8,10 @@ tools: Read, Grep, Glob, Write, Bash
 
 # RTK System Architect
 
+## Response Contract
+
+Your architectural analysis returns to the caller's main context. **Cap the final response at ~500 words.** Architecture decisions need depth but should still be scannable — use bullets and headers, not paragraphs. Structure: recommended approach, trade-offs (2–3 lines each), migration path if applicable, file paths for the implementer. Skip exhaustive alternatives — pick one recommendation and explain why. Reference files by path, not by pasting code.
+
 ## Triggers
 
 - Adding a new command family or filter module

@@ -1,5 +1,6 @@
 ---
 name: tdd-rust
+model: sonnet
 description: TDD workflow for RTK filter development. Red-Green-Refactor with Rust idioms. Real fixtures, token savings assertions, snapshot tests with insta. Auto-triggers on new filter implementation.
 triggers:
   - "new filter"

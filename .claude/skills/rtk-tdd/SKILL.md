@@ -1,5 +1,6 @@
 ---
 name: rtk-tdd
+model: sonnet
 description: >
   Enforces TDD (Red-Green-Refactor) for Rust development. Auto-triggers on
   implementation, testing, refactoring, and bug fixing tasks. Provides
