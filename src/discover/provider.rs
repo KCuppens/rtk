@@ -3,7 +3,7 @@
 use crate::hooks::init::resolve_claude_dir;
 use anyhow::{Context, Result};
 use std::collections::HashMap;
-use std::fs;
+use std::fs::{self, File};
 use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
@@ -25,6 +25,31 @@ pub struct ExtractedCommand {
     pub sequence_index: usize,
 }
 
+/// Aggregate counts + total tool_result bytes for tool_use records that
+/// bypass RTK's Bash hook (WebFetch, WebSearch — see #2863). These are
+/// reported as "unreachable" in `rtk discover` so the user can see how much
+/// unfiltered content is flowing through non-Bash tool paths.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+pub struct WebToolUsage {
+    pub web_fetch_count: usize,
+    pub web_fetch_output_bytes: usize,
+    pub web_search_count: usize,
+    pub web_search_output_bytes: usize,
+}
+
+impl WebToolUsage {
+    pub fn merge(&mut self, other: &WebToolUsage) {
+        self.web_fetch_count += other.web_fetch_count;
+        self.web_fetch_output_bytes += other.web_fetch_output_bytes;
+        self.web_search_count += other.web_search_count;
+        self.web_search_output_bytes += other.web_search_output_bytes;
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.web_fetch_count == 0 && self.web_search_count == 0
+    }
+}
+
 /// Trait for session providers (Claude Code, OpenCode, etc.).
 ///
 /// Note: Cursor Agent transcripts use a text-only format without structured
@@ -37,6 +62,13 @@ pub trait SessionProvider {
         since_days: Option<u64>,
     ) -> Result<Vec<PathBuf>>;
     fn extract_commands(&self, path: &Path) -> Result<Vec<ExtractedCommand>>;
+
+    /// Count non-Bash tool_use records that fall outside RTK's Bash-only hook
+    /// boundary. Default: empty, since providers without structured tool_use
+    /// blocks (Cursor) cannot see them and other providers may not need them.
+    fn extract_web_tool_usage(&self, _path: &Path) -> Result<WebToolUsage> {
+        Ok(WebToolUsage::default())
+    }
 }
 
 pub struct ClaudeProvider;
@@ -264,6 +296,103 @@ impl SessionProvider for ClaudeProvider {
         }
 
         Ok(commands)
+    }
+
+    /// #2863: count WebFetch/WebSearch tool_use records and sum their
+    /// tool_result content bytes so `rtk discover` can surface how much
+    /// non-Bash tool output is bypassing RTK's Bash-only hook.
+    fn extract_web_tool_usage(&self, path: &Path) -> Result<WebToolUsage> {
+        let file = File::open(path)
+            .with_context(|| format!("Failed to open session file: {}", path.display()))?;
+        let reader = BufReader::new(file);
+
+        let mut usage = WebToolUsage::default();
+        // Map tool_use_id → tool_name so we can bill the matching tool_result to the right tool.
+        let mut pending: HashMap<String, &'static str> = HashMap::new();
+
+        for line in reader.lines() {
+            let line = match line {
+                Ok(l) => l,
+                Err(_) => continue,
+            };
+            // Pre-filter: skip lines that can't contain a web tool_use or a tool_result.
+            if !line.contains("WebFetch")
+                && !line.contains("WebSearch")
+                && !line.contains("\"tool_result\"")
+            {
+                continue;
+            }
+            let entry: serde_json::Value = match serde_json::from_str(&line) {
+                Ok(v) => v,
+                Err(_) => continue,
+            };
+            let entry_type = entry.get("type").and_then(|t| t.as_str()).unwrap_or("");
+
+            match entry_type {
+                "assistant" => {
+                    let Some(content) =
+                        entry.pointer("/message/content").and_then(|c| c.as_array())
+                    else {
+                        continue;
+                    };
+                    for block in content {
+                        if block.get("type").and_then(|t| t.as_str()) != Some("tool_use") {
+                            continue;
+                        }
+                        let name = block.get("name").and_then(|n| n.as_str()).unwrap_or("");
+                        let tool: &'static str = match name {
+                            "WebFetch" => {
+                                usage.web_fetch_count += 1;
+                                "WebFetch"
+                            }
+                            "WebSearch" => {
+                                usage.web_search_count += 1;
+                                "WebSearch"
+                            }
+                            _ => continue,
+                        };
+                        if let Some(id) = block.get("id").and_then(|i| i.as_str()) {
+                            pending.insert(id.to_string(), tool);
+                        }
+                    }
+                }
+                "user" => {
+                    let Some(content) =
+                        entry.pointer("/message/content").and_then(|c| c.as_array())
+                    else {
+                        continue;
+                    };
+                    for block in content {
+                        if block.get("type").and_then(|t| t.as_str()) != Some("tool_result") {
+                            continue;
+                        }
+                        let Some(id) = block.get("tool_use_id").and_then(|i| i.as_str()) else {
+                            continue;
+                        };
+                        let Some(tool) = pending.remove(id) else {
+                            continue;
+                        };
+                        // tool_result content may be a string or an array of parts.
+                        let bytes = match block.get("content") {
+                            Some(serde_json::Value::String(s)) => s.len(),
+                            Some(serde_json::Value::Array(parts)) => parts
+                                .iter()
+                                .filter_map(|p| p.get("text").and_then(|t| t.as_str()))
+                                .map(|s| s.len())
+                                .sum(),
+                            _ => 0,
+                        };
+                        match tool {
+                            "WebFetch" => usage.web_fetch_output_bytes += bytes,
+                            "WebSearch" => usage.web_search_output_bytes += bytes,
+                            _ => {}
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+        Ok(usage)
     }
 }
 
@@ -529,5 +658,96 @@ mod tests {
         assert_eq!(cmds[0].command, "first");
         assert_eq!(cmds[1].command, "second");
         assert_eq!(cmds[2].command, "third");
+    }
+
+    // --- #2863: WebFetch / WebSearch tool_use extraction ---
+
+    #[test]
+    fn test_extract_web_tool_usage_counts_webfetch_and_output() {
+        let jsonl = make_jsonl(&[
+            r#"{"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","id":"toolu_wf_1","name":"WebFetch","input":{"url":"https://example.com"}}]}}"#,
+            r#"{"type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_wf_1","content":"page body of some length"}]}}"#,
+        ]);
+        let provider = ClaudeProvider;
+        let usage = provider.extract_web_tool_usage(jsonl.path()).unwrap();
+        assert_eq!(usage.web_fetch_count, 1);
+        assert_eq!(
+            usage.web_fetch_output_bytes,
+            "page body of some length".len()
+        );
+        assert_eq!(usage.web_search_count, 0);
+        assert_eq!(usage.web_search_output_bytes, 0);
+    }
+
+    #[test]
+    fn test_extract_web_tool_usage_counts_websearch() {
+        let jsonl = make_jsonl(&[
+            r#"{"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","id":"toolu_ws_1","name":"WebSearch","input":{"query":"rust"}}]}}"#,
+            r#"{"type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_ws_1","content":"result blob"}]}}"#,
+        ]);
+        let provider = ClaudeProvider;
+        let usage = provider.extract_web_tool_usage(jsonl.path()).unwrap();
+        assert_eq!(usage.web_search_count, 1);
+        assert_eq!(usage.web_search_output_bytes, "result blob".len());
+        assert_eq!(usage.web_fetch_count, 0);
+    }
+
+    #[test]
+    fn test_extract_web_tool_usage_handles_array_content() {
+        // Claude Code sometimes emits tool_result content as an array of parts.
+        let jsonl = make_jsonl(&[
+            r#"{"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","id":"toolu_wf_2","name":"WebFetch","input":{"url":"x"}}]}}"#,
+            r#"{"type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_wf_2","content":[{"type":"text","text":"hello "},{"type":"text","text":"world"}]}]}}"#,
+        ]);
+        let provider = ClaudeProvider;
+        let usage = provider.extract_web_tool_usage(jsonl.path()).unwrap();
+        assert_eq!(usage.web_fetch_count, 1);
+        assert_eq!(usage.web_fetch_output_bytes, "hello world".len());
+    }
+
+    #[test]
+    fn test_extract_web_tool_usage_ignores_bash() {
+        let jsonl = make_jsonl(&[
+            r#"{"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","id":"toolu_b","name":"Bash","input":{"command":"ls"}}]}}"#,
+            r#"{"type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_b","content":"file"}]}}"#,
+        ]);
+        let provider = ClaudeProvider;
+        let usage = provider.extract_web_tool_usage(jsonl.path()).unwrap();
+        assert!(usage.is_empty());
+    }
+
+    #[test]
+    fn test_extract_web_tool_usage_result_without_match_ignored() {
+        // Orphan tool_result (no matching tool_use we tracked) should not
+        // contribute bytes.
+        let jsonl = make_jsonl(&[
+            r#"{"type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_unknown","content":"stray"}]}}"#,
+        ]);
+        let provider = ClaudeProvider;
+        let usage = provider.extract_web_tool_usage(jsonl.path()).unwrap();
+        assert!(usage.is_empty());
+    }
+
+    #[test]
+    fn test_webtoolusage_merge_and_is_empty() {
+        let mut acc = WebToolUsage::default();
+        assert!(acc.is_empty());
+        acc.merge(&WebToolUsage {
+            web_fetch_count: 3,
+            web_fetch_output_bytes: 1200,
+            web_search_count: 5,
+            web_search_output_bytes: 4000,
+        });
+        acc.merge(&WebToolUsage {
+            web_fetch_count: 2,
+            web_fetch_output_bytes: 800,
+            web_search_count: 1,
+            web_search_output_bytes: 250,
+        });
+        assert_eq!(acc.web_fetch_count, 5);
+        assert_eq!(acc.web_fetch_output_bytes, 2000);
+        assert_eq!(acc.web_search_count, 6);
+        assert_eq!(acc.web_search_output_bytes, 4250);
+        assert!(!acc.is_empty());
     }
 }

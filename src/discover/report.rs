@@ -105,6 +105,14 @@ pub struct DiscoverReport {
     pub rtk_disabled_count: usize,
     pub rtk_disabled_examples: Vec<String>,
     pub agent_status: AgentIntegrationStatus,
+    /// #2863: WebFetch/WebSearch tool calls that bypass RTK's Bash-only hook.
+    /// Surfaced so users can see the size of the non-Bash "unreachable" surface.
+    #[serde(skip_serializing_if = "unreachable_is_zero")]
+    pub unreachable_web_tools: crate::discover::provider::WebToolUsage,
+}
+
+fn unreachable_is_zero(u: &crate::discover::provider::WebToolUsage) -> bool {
+    u.is_empty()
 }
 
 impl DiscoverReport {
@@ -143,6 +151,12 @@ pub fn format_text(report: &DiscoverReport, limit: usize, verbose: bool) -> Stri
 
     if report.supported.is_empty() && report.unsupported.is_empty() {
         out.push_str("\nNo missed savings found. RTK usage looks good!\n");
+        // #2863: still surface the unreachable section — a user may have all
+        // Bash commands filtered but still be making heavy WebFetch/WebSearch
+        // calls that bypass RTK.
+        if !report.unreachable_web_tools.is_empty() {
+            append_unreachable_section(&mut out, &report.unreachable_web_tools);
+        }
         append_agent_notes(&mut out, report.agent_status);
         return out;
     }
@@ -216,6 +230,11 @@ pub fn format_text(report: &DiscoverReport, limit: usize, verbose: bool) -> Stri
         out.push_str("-> Remove RTK_DISABLED=1 to recover token savings\n");
     }
 
+    // #2863: non-Bash tool calls that bypass RTK's Bash-only hook.
+    if !report.unreachable_web_tools.is_empty() {
+        append_unreachable_section(&mut out, &report.unreachable_web_tools);
+    }
+
     out.push_str("\n~estimated from tool_result output sizes\n");
 
     append_agent_notes(&mut out, report.agent_status);
@@ -225,6 +244,45 @@ pub fn format_text(report: &DiscoverReport, limit: usize, verbose: bool) -> Stri
     }
 
     out
+}
+
+/// #2863: render the "outside RTK's Bash hook" boundary as an informational
+/// section. Purely visibility — these tokens can't be saved by the current
+/// hook design, but showing them prevents users from assuming they are.
+fn append_unreachable_section(out: &mut String, u: &crate::discover::provider::WebToolUsage) {
+    let wf_tokens = u.web_fetch_output_bytes / 4;
+    let ws_tokens = u.web_search_output_bytes / 4;
+    out.push_str("\nUNREACHABLE -- outside RTK's Bash hook (see #2863)\n");
+    out.push_str(&"-".repeat(72));
+    out.push('\n');
+    out.push_str(&format!(
+        "{:<24} {:>5}    {:<18} {:>12}\n",
+        "Tool", "Count", "Notes", "Est. Output"
+    ));
+    if u.web_fetch_count > 0 {
+        out.push_str(&format!(
+            "{:<24} {:>5}    {:<18} ~{}\n",
+            "WebFetch",
+            u.web_fetch_count,
+            "cannot filter",
+            format_tokens(wf_tokens),
+        ));
+    }
+    if u.web_search_count > 0 {
+        out.push_str(&format!(
+            "{:<24} {:>5}    {:<18} ~{}\n",
+            "WebSearch",
+            u.web_search_count,
+            "cannot filter",
+            format_tokens(ws_tokens),
+        ));
+    }
+    out.push_str(&"-".repeat(72));
+    out.push('\n');
+    out.push_str(
+        "-> Claude Code's PreToolUse hook only matches Bash; \
+         non-Bash tool_use records bypass RTK. See github.com/rtk-ai/rtk/issues/2863\n",
+    );
 }
 
 fn append_agent_notes(out: &mut String, status: AgentIntegrationStatus) {
@@ -286,6 +344,7 @@ mod tests {
             rtk_disabled_count: 0,
             rtk_disabled_examples: vec![],
             agent_status: AgentIntegrationStatus::default(),
+            unreachable_web_tools: crate::discover::provider::WebToolUsage::default(),
         }
     }
 
@@ -425,5 +484,52 @@ mod tests {
             "Expected Copilot note in output but got:\n{}",
             output
         );
+    }
+
+    // --- #2863: unreachable web-tool section ---
+
+    #[test]
+    fn test_unreachable_section_hidden_when_no_web_tools() {
+        let report = make_report(10, 5);
+        let out = format_text(&report, 10, false);
+        assert!(!out.contains("UNREACHABLE"));
+        assert!(!out.contains("WebFetch"));
+        assert!(!out.contains("WebSearch"));
+    }
+
+    #[test]
+    fn test_unreachable_section_shown_with_counts_and_estimated_tokens() {
+        let mut report = make_report(10, 5);
+        report.unreachable_web_tools = crate::discover::provider::WebToolUsage {
+            web_fetch_count: 343,
+            web_fetch_output_bytes: 400_000, // ~100K tokens
+            web_search_count: 417,
+            web_search_output_bytes: 2_400_000, // ~600K tokens
+        };
+        let out = format_text(&report, 10, false);
+        assert!(out.contains("UNREACHABLE"), "header missing: {out}");
+        assert!(out.contains("WebFetch"));
+        assert!(out.contains("343"));
+        assert!(out.contains("WebSearch"));
+        assert!(out.contains("417"));
+        // Rough tokens: 400k bytes / 4 = 100K, 2.4M / 4 = 600K
+        assert!(out.contains("100.0K") || out.contains("100.0K tokens"));
+        assert!(out.contains("600.0K") || out.contains("600.0K tokens"));
+        // Links back to the issue so users can read the boundary explanation.
+        assert!(out.contains("#2863") || out.contains("2863"));
+    }
+
+    #[test]
+    fn test_unreachable_omits_zero_tool_rows() {
+        let mut report = make_report(10, 5);
+        report.unreachable_web_tools = crate::discover::provider::WebToolUsage {
+            web_fetch_count: 5,
+            web_fetch_output_bytes: 4000,
+            web_search_count: 0,
+            web_search_output_bytes: 0,
+        };
+        let out = format_text(&report, 10, false);
+        assert!(out.contains("WebFetch"));
+        assert!(!out.contains("WebSearch"));
     }
 }
