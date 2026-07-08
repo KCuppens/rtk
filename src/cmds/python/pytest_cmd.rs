@@ -516,4 +516,29 @@ collected 3 items
             result
         );
     }
+
+    // --- Structural test: pytest is an error-surfacer.
+    #[test]
+    fn test_pytest_error_surface_structure() {
+        let mut input = String::from(
+            "=== test session starts ===\nplatform linux -- Python 3.11.4\ncollected 50 items\n\n",
+        );
+        for i in 0..40 {
+            input.push_str(&format!("tests/test_module_{i}.py::test_a PASSED  [ {i}%]\n"));
+        }
+        input.push_str("tests/test_auth.py::test_login FAILED  [ 82%]\n\n");
+        input.push_str("=== FAILURES ===\n________ test_login ________\n");
+        input.push_str("    assert user.session == 'active'\n");
+        input.push_str("AssertionError: assert None == 'active'\n\n");
+        input.push_str("=== 1 failed, 49 passed in 4.32s ===\n");
+        let output = filter_pytest_output(&input);
+        assert!(
+            output.contains("failed"),
+            "missing failure count, got: {output}"
+        );
+        assert!(
+            output.contains("test_login") || output.contains("test_auth"),
+            "failing test path missing, got: {output}"
+        );
+    }
 }

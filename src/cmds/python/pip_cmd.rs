@@ -275,4 +275,33 @@ mod tests {
         assert!(result.contains("pytest"));
         assert!(result.contains("7.4.0 → 8.0.0"));
     }
+
+    // --- Structural test: `pip list` is an inventory query; it preserves every
+    //     package by design (see doc comment on filter_pip_list). Assert header
+    //     shape and that every package name survives — no % gate.
+
+    #[test]
+    fn test_pip_list_structure_preserves_all_packages() {
+        let mut input = String::from("[");
+        for i in 0..30 {
+            let sep = if i == 0 { "" } else { "," };
+            input.push_str(&format!(
+                r#"{sep}{{"name":"pkg-{i}","version":"1.0.{i}"}}"#
+            ));
+        }
+        input.push_str("]");
+        let output = filter_pip_list(&input);
+        // Header preserved.
+        assert!(
+            output.contains("pip list: 30 packages"),
+            "missing header, got: {output}"
+        );
+        // Every package name preserved.
+        for i in 0..30 {
+            assert!(
+                output.contains(&format!("pkg-{i}")),
+                "pkg-{i} missing, got: {output}"
+            );
+        }
+    }
 }
