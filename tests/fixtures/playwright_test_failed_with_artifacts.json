@@ -1,0 +1,129 @@
+{
+  "config": {},
+  "stats": {
+    "startTime": "2026-07-08T10:00:00.000Z",
+    "expected": 2,
+    "unexpected": 1,
+    "skipped": 0,
+    "flaky": 0,
+    "duration": 12480.5
+  },
+  "suites": [
+    {
+      "title": "auth",
+      "file": "tests/auth/login.spec.ts",
+      "specs": [
+        {
+          "title": "should log in with valid credentials",
+          "ok": true,
+          "tests": [
+            {
+              "status": "expected",
+              "results": [
+                {
+                  "status": "passed",
+                  "errors": [],
+                  "attachments": [],
+                  "stdout": [],
+                  "stderr": [],
+                  "duration": 2300
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "title": "should redirect on invalid credentials",
+          "ok": false,
+          "tests": [
+            {
+              "status": "unexpected",
+              "results": [
+                {
+                  "status": "failed",
+                  "errors": [
+                    {
+                      "message": "Error: expect(page).toHaveURL(expected)\n\nExpected pattern: /\\/dashboard/\nReceived string:  \"http://localhost:3000/login\"\n\nCall log:\n  - waiting for URL /\\/dashboard/\n    9 × locator resolved to <div class=\"error\">Invalid credentials</div>",
+                      "stack": "Error: expect(page).toHaveURL(expected)\n    at LoginPage.submit (/app/src/pages/login.ts:88:14)\n    at Object.<anonymous> (/app/tests/auth/login.spec.ts:44:5)\n    at processTicksAndRejections (/app/node_modules/internal/process/task_queues.js:95:5)\n    at async Suite.runTest (/app/node_modules/@playwright/test/lib/runner/worker.js:112:9)\n    at async Runner.run (/app/node_modules/@playwright/test/lib/runner/dispatcher.js:42:3)",
+                      "snippet": "  42 |   await page.fill('#password', 'wrong-password')\n  43 |   await page.click('button[type=submit]')\n> 44 |   await expect(page).toHaveURL(/\\/dashboard/)\n     |                            ^\n  45 | })\n  46 |"
+                    }
+                  ],
+                  "attachments": [
+                    {
+                      "name": "video",
+                      "path": "test-results/auth-login-invalid/video.webm",
+                      "contentType": "video/webm"
+                    },
+                    {
+                      "name": "screenshot",
+                      "path": "test-results/auth-login-invalid/test-failed-1.png",
+                      "contentType": "image/png"
+                    },
+                    {
+                      "name": "trace",
+                      "path": "test-results/auth-login-invalid/trace.zip",
+                      "contentType": "application/zip"
+                    }
+                  ],
+                  "stdout": [
+                    {"text": "\u001b[36m[browser console]\u001b[0m navigating to /login\n"},
+                    {"text": "[browser console.error] Uncaught TypeError: Cannot read property 'redirect' of undefined at auth.js:112\n"}
+                  ],
+                  "stderr": [],
+                  "duration": 5200
+                },
+                {
+                  "status": "failed",
+                  "errors": [
+                    {
+                      "message": "Error: expect(page).toHaveURL(expected)",
+                      "stack": "Error: expect(page).toHaveURL(expected)\n    at LoginPage.submit (/app/src/pages/login.ts:88:14)"
+                    }
+                  ],
+                  "attachments": [
+                    {
+                      "name": "video",
+                      "path": "test-results/auth-login-invalid-retry1/video.webm",
+                      "contentType": "video/webm"
+                    },
+                    {
+                      "name": "trace",
+                      "path": "test-results/auth-login-invalid-retry1/trace.zip",
+                      "contentType": "application/zip"
+                    }
+                  ],
+                  "stdout": [],
+                  "stderr": [],
+                  "duration": 5100
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "title": "should show tooltip on hover",
+          "ok": true,
+          "tests": [
+            {
+              "status": "expected",
+              "results": [
+                {
+                  "status": "passed",
+                  "errors": [],
+                  "attachments": [],
+                  "stdout": [
+                    {"text": "console.log from a passing test — should NOT appear in filtered output\n"}
+                  ],
+                  "stderr": [],
+                  "duration": 980
+                }
+              ]
+            }
+          ]
+        }
+      ],
+      "suites": []
+    }
+  ],
+  "errors": []
+}
