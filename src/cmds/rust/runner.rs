@@ -290,4 +290,29 @@ mod tests {
         assert!(filtered.contains("error"));
         assert!(!filtered.contains("info"));
     }
+
+    // --- Compressor: filter_errors drops info/note noise, keeps error blocks.
+
+    fn count_tokens_runner(s: &str) -> usize {
+        s.split_whitespace().count()
+    }
+
+    #[test]
+    fn test_filter_errors_savings_over_60_percent() {
+        let mut input = String::new();
+        for i in 0..40 {
+            input.push_str(&format!(
+                "info: compiling crate-{i}\ninfo: building crate-{i} unit-tests\n"
+            ));
+        }
+        input.push_str("error: one thing failed\n");
+        input.push_str("  at src/lib.rs:5\n");
+        let output = filter_errors(&input);
+        let savings = 100.0
+            - (count_tokens_runner(&output) as f64 / count_tokens_runner(&input) as f64 * 100.0);
+        assert!(
+            savings >= 60.0,
+            "rust runner filter_errors: expected >=60% savings, got {savings:.1}%"
+        );
+    }
 }

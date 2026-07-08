@@ -513,4 +513,36 @@ diff --git a/b.rs b/b.rs
             }
         }
     }
+
+    // --- Compressor: rtk diff between two nearly-identical files should be
+    //     small compared to the total input (both files concatenated).
+
+    fn count_tokens_diff(s: &str) -> usize {
+        s.split_whitespace().count()
+    }
+
+    #[test]
+    fn test_render_file_diff_savings_over_60_percent() {
+        // File A: 50 identical lines + 1 modified line.
+        let mut a = String::new();
+        for i in 0..50 {
+            a.push_str(&format!("line number {i} of some file with content\n"));
+        }
+        a.push_str("this is the original line\n");
+        let mut b = a.clone();
+        // Modify only the last line.
+        b.truncate(a.len() - "this is the original line\n".len());
+        b.push_str("this is the modified line\n");
+
+        let raw = format!("{}\n---\n{}", a, b);
+        let (rtk, exit_code) =
+            render_file_diff(Path::new("a.txt"), Path::new("b.txt"), &a, &b);
+        assert_eq!(exit_code, 1);
+        let savings =
+            100.0 - (count_tokens_diff(&rtk) as f64 / count_tokens_diff(&raw) as f64 * 100.0);
+        assert!(
+            savings >= 60.0,
+            "rtk diff: expected >=60% savings, got {savings:.1}%"
+        );
+    }
 }
