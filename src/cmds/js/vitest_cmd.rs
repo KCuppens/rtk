@@ -410,10 +410,31 @@ where
         tee_hint(raw, tee_label, exit_code)
     };
 
+    let body = if exit_code != 0 && reporter_claims_success(&filtered.text) {
+        // #2874: vitest's JSON reporter can report PASS while the process exits
+        // non-zero due to an uncaught async exception during teardown. Surface
+        // the discrepancy so callers don't treat the run as green.
+        format!(
+            "WARNING: process exited {} but reporter claimed success \
+             (likely uncaught exception in test runtime; check raw log)\n{}",
+            exit_code, filtered.text
+        )
+    } else {
+        filtered.text.clone()
+    };
+
     match hint {
-        Some(hint) => format!("{}\n{}", filtered.text, hint),
-        None => filtered.text.clone(),
+        Some(hint) => format!("{}\n{}", body, hint),
+        None => body,
     }
+}
+
+/// Detect the `PASS (N) FAIL (0)` shape emitted by `TestResult::format_compact`
+/// with zero failures. Used to catch the vitest JSON-reporter blind spot where
+/// the reporter says all is well but the process exited non-zero.
+fn reporter_claims_success(text: &str) -> bool {
+    let first_line = text.lines().next().unwrap_or("");
+    first_line.starts_with("PASS (") && first_line.contains(" FAIL (0)")
 }
 
 #[cfg(test)]
@@ -608,5 +629,55 @@ Scope: all 6 workspace projects
         assert!(rendered.contains("[RTK:PASSTHROUGH] Output truncated"));
         assert!(rendered.contains("[full output: /tmp/vitest_run.log]"));
         assert!(!rendered.contains("wrong-path.log"));
+    }
+
+    // --- #2874: reporter-vs-exit-code discrepancy ---
+
+    #[test]
+    fn test_render_flags_reporter_success_but_nonzero_exit() {
+        // Vitest JSON reporter says PASS but the process crashed post-run.
+        let filtered = FormattedTestOutput::new("PASS (12) FAIL (0)\nTime: 340ms".to_string());
+        let rendered = render_test_output_with_hints(
+            &filtered,
+            "raw output",
+            "vitest_run",
+            1,
+            |_, _| None,
+            |_, _, _| None,
+        );
+        assert!(
+            rendered.contains("WARNING") && rendered.contains("exited 1"),
+            "expected discrepancy warning, got: {rendered}"
+        );
+        assert!(rendered.contains("PASS (12) FAIL (0)"));
+    }
+
+    #[test]
+    fn test_render_no_warning_when_exit_zero() {
+        let filtered = FormattedTestOutput::new("PASS (12) FAIL (0)\nTime: 340ms".to_string());
+        let rendered = render_test_output_with_hints(
+            &filtered,
+            "raw output",
+            "vitest_run",
+            0,
+            |_, _| None,
+            |_, _, _| None,
+        );
+        assert!(!rendered.contains("WARNING"));
+    }
+
+    #[test]
+    fn test_render_no_warning_when_reporter_shows_failures() {
+        // Reporter correctly reported failure — no discrepancy, no double-warning.
+        let filtered = FormattedTestOutput::new("PASS (10) FAIL (2)\nTime: 340ms".to_string());
+        let rendered = render_test_output_with_hints(
+            &filtered,
+            "raw output",
+            "vitest_run",
+            1,
+            |_, _| None,
+            |_, _, _| None,
+        );
+        assert!(!rendered.contains("WARNING"));
     }
 }
