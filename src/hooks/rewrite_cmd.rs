@@ -44,6 +44,11 @@ enum RewriteOutcome {
     Ask(String),
 }
 
+fn contains_pipe(cmd: &str) -> bool {
+    use crate::discover::lexer::{tokenize, TokenKind};
+    tokenize(cmd).iter().any(|t| t.kind == TokenKind::Pipe)
+}
+
 fn evaluate(cmd: &str, excluded: &[String], transparent_prefixes: &[String]) -> RewriteOutcome {
     let verdict = check_command(cmd);
 
@@ -52,6 +57,16 @@ fn evaluate(cmd: &str, excluded: &[String], transparent_prefixes: &[String]) -> 
     }
 
     if crate::discover::lexer::contains_unattestable_construct(cmd) {
+        return RewriteOutcome::Passthrough;
+    }
+
+    // #2861: never rewrite pipeline commands. RTK filters decorate/reshape the
+    // output stream, which breaks downstream consumers (`| grep`, `| xargs`,
+    // `| jq`) that were written to parse the raw command's format. The reported
+    // incident was a `find ... | xargs rm` where filter decoration produced
+    // unexpected paths, causing destructive deletions. Piped commands must pass
+    // through untouched.
+    if contains_pipe(cmd) {
         return RewriteOutcome::Passthrough;
     }
 
@@ -137,6 +152,43 @@ mod tests {
         fn test_plain_command_still_rewrites() {
             assert!(matches!(
                 evaluate("git status", &[], &[]),
+                RewriteOutcome::Ask(_)
+            ));
+        }
+
+        // --- #2861: pipeline commands must never be rewritten ---
+
+        #[test]
+        fn test_pipe_to_grep_passthrough() {
+            // Reported incident shape: filter decoration corrupts what grep sees.
+            assert_eq!(
+                evaluate("git log -10 | grep feat", &[], &[]),
+                RewriteOutcome::Passthrough
+            );
+        }
+
+        #[test]
+        fn test_pipe_to_xargs_passthrough() {
+            // The exact class of command that caused destructive deletion.
+            assert_eq!(
+                evaluate("find . -name '*.tmp' | xargs rm", &[], &[]),
+                RewriteOutcome::Passthrough
+            );
+        }
+
+        #[test]
+        fn test_multi_stage_pipe_passthrough() {
+            assert_eq!(
+                evaluate("cargo test | grep FAIL | wc -l", &[], &[]),
+                RewriteOutcome::Passthrough
+            );
+        }
+
+        #[test]
+        fn test_pipe_inside_string_still_rewrites() {
+            // A literal `|` inside a quoted arg is not a pipe operator.
+            assert!(matches!(
+                evaluate("git log --grep='feat|fix'", &[], &[]),
                 RewriteOutcome::Ask(_)
             ));
         }
