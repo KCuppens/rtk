@@ -277,4 +277,34 @@ mod tests {
         // Should not panic even with very long multi-byte messages
         assert!(result.contains("ERRORS"));
     }
+
+    // --- Compressor: log analyzer dedupes repeated lines. Assert >=60% savings.
+
+    fn count_tokens_log(s: &str) -> usize {
+        s.split_whitespace().count()
+    }
+
+    #[test]
+    fn test_log_analyze_savings_over_60_percent() {
+        let mut input = String::new();
+        // 100 near-identical error lines (differ only by timestamp/uuid) that
+        // should all dedupe to one entry.
+        for i in 0..100 {
+            input.push_str(&format!(
+                "2024-01-01 10:00:{i:02} ERROR: db connection failed for user abc-123\n"
+            ));
+        }
+        for i in 0..50 {
+            input.push_str(&format!(
+                "2024-01-01 11:00:{i:02} WARN: slow query took 1234ms\n"
+            ));
+        }
+        let output = analyze_logs(&input);
+        let savings =
+            100.0 - (count_tokens_log(&output) as f64 / count_tokens_log(&input) as f64 * 100.0);
+        assert!(
+            savings >= 60.0,
+            "log analyzer: expected >=60% savings, got {savings:.1}%"
+        );
+    }
 }

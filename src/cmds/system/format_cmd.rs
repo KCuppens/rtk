@@ -374,4 +374,30 @@ Oh no! 💥 💔 💥
         );
         assert_eq!(compact_path("relative/file.py"), "file.py");
     }
+
+    // --- Structural: black --check output preserves each "would reformat" file.
+    //     No % gate — file list preservation is by design.
+
+    #[test]
+    fn test_black_check_structure() {
+        let mut input = String::new();
+        for i in 0..10 {
+            input.push_str(&format!("would reformat: src/module{i}/file{i}.py\n"));
+        }
+        input.push_str("Oh no! 💥 💔 💥\n");
+        input.push_str("10 files would be reformatted, 20 files would be left unchanged.\n");
+        let output = filter_black_output(&input);
+        // Summary count preserved.
+        assert!(
+            output.contains("10") && output.to_lowercase().contains("file"),
+            "missing count summary, got: {output}"
+        );
+        // Compact-path file names still visible (may be shortened).
+        for i in 0..10 {
+            assert!(
+                output.contains(&format!("file{i}.py")),
+                "file{i}.py missing, got: {output}"
+            );
+        }
+    }
 }
