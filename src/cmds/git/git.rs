@@ -445,10 +445,17 @@ fn run_log(
             || arg.starts_with("--max-count")
     });
 
+    // #2882: `git log --stat` (and friends) prints the diffstat AFTER the pretty
+    // format's `---END---` sentinel, so `filter_log_output` mis-aligns commit
+    // blocks and silently drops commits. When a stat-family flag is present,
+    // don't inject the custom pretty format — let git use its default and pass
+    // its output through unchanged (git already applied the -N limit).
+    let has_stat_flag = has_stat_family_flag(args);
+
     // Apply RTK defaults only if user didn't specify them
     // Use %b (body) to preserve first line of commit body for agent context
     // (BREAKING CHANGE, Closes #xxx, design notes)
-    if !has_format_flag {
+    if !has_format_flag && !has_stat_flag {
         cmd.args(["--pretty=format:%h %s (%ar) <%an>%n%b%n---END---"]);
     }
 
@@ -492,8 +499,16 @@ fn run_log(
         eprintln!("Git log output:");
     }
 
-    // Post-process: truncate long messages, cap lines only if RTK set the default
-    let filtered = filter_log_output(&result.stdout, limit, user_set_limit, has_format_flag);
+    // #2882: `--stat` (and friends) prints a per-commit diffstat that spans
+    // multiple lines and lacks any stable boundary marker between commits. Any
+    // line-based filter would either drop commits or mis-attribute diffstat
+    // lines. Git already applied the -N limit, so pass the output through
+    // unchanged in this mode — matching how `run_diff` handles `git diff --stat`.
+    let filtered = if has_stat_flag {
+        result.stdout.clone()
+    } else {
+        filter_log_output(&result.stdout, limit, user_set_limit, has_format_flag)
+    };
     let filtered = never_worse(&result.stdout, &filtered).to_string();
     println!("{}", filtered);
 
@@ -505,6 +520,23 @@ fn run_log(
     );
 
     Ok(0)
+}
+
+/// Detects `--stat`-family flags on `git log`. When any of these is present,
+/// git emits multi-line diffstat blocks that break RTK's `---END---` sentinel
+/// parsing, so the log must pass through unchanged (see #2882).
+pub(crate) fn has_stat_family_flag(args: &[String]) -> bool {
+    args.iter().any(|arg| {
+        arg == "--stat"
+            || arg == "--numstat"
+            || arg == "--shortstat"
+            || arg == "--dirstat"
+            || arg == "--summary"
+            || arg == "--name-only"
+            || arg == "--name-status"
+            || arg.starts_with("--stat=")
+            || arg.starts_with("--dirstat=")
+    })
 }
 
 /// Filter git log output: truncate long messages, cap lines
@@ -2760,6 +2792,25 @@ no changes added to commit (use "git add" and/or "git commit -a")
         // user_set_limit=false means cap at limit
         let result = filter_log_output(oneline_output, 3, false, true);
         assert_eq!(result.lines().count(), 3);
+    }
+
+    // --- #2882: git log --stat must not drop commits ---
+
+    #[test]
+    fn test_has_stat_family_flag_variants() {
+        assert!(has_stat_family_flag(&["--stat".into()]));
+        assert!(has_stat_family_flag(&["--numstat".into()]));
+        assert!(has_stat_family_flag(&["--shortstat".into()]));
+        assert!(has_stat_family_flag(&["--dirstat".into()]));
+        assert!(has_stat_family_flag(&["--summary".into()]));
+        assert!(has_stat_family_flag(&["--name-only".into()]));
+        assert!(has_stat_family_flag(&["--name-status".into()]));
+        assert!(has_stat_family_flag(&["--stat=200".into()]));
+        assert!(has_stat_family_flag(&["--dirstat=files,10".into()]));
+
+        assert!(!has_stat_family_flag(&["-10".into()]));
+        assert!(!has_stat_family_flag(&["--oneline".into()]));
+        assert!(!has_stat_family_flag(&[]));
     }
 
     /// Regression test: `git branch <name>` must create, not list.
