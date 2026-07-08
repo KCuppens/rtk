@@ -1,0 +1,64 @@
+[filters.npm-audit]
+description = "Compact npm audit output — keep vulns and summary, strip advisory URLs and boilerplate"
+match_command = "^(pnpm\\s+|yarn\\s+)?npm\\s+audit\\b"
+strip_ansi = true
+strip_lines_matching = [
+  "^\\s*$",
+  "^# npm audit report",
+  "^\\s*https://github\\.com/advisories/",
+  "^\\s*fix available via ",
+  "^Will install ",
+  "^node_modules/",
+  "^To address issues that do not require attention",
+  "^To address all issues \\(including breaking changes\\)",
+  "^\\s+npm audit fix",
+  "^Run `npm audit` for details",
+]
+truncate_lines_at = 200
+max_lines = 80
+on_empty = "npm audit: no vulnerabilities"
+
+[[tests.npm-audit]]
+name = "clean report short-circuits via on_empty"
+input = "\n\n"
+expected = "npm audit: no vulnerabilities"
+
+[[tests.npm-audit]]
+name = "keeps vuln names and summary, strips URLs and fix boilerplate"
+input = """
+# npm audit report
+
+lodash  <=4.17.20
+Severity: high
+Prototype Pollution in lodash
+  https://github.com/advisories/GHSA-abcd-1234-efgh
+fix available via `npm audit fix`
+node_modules/lodash
+
+async  <2.6.4
+Severity: high
+Prototype Pollution in async
+  https://github.com/advisories/GHSA-wxyz-9876-vuts
+fix available via `npm audit fix --force`
+Will install async@3.2.4, which is a breaking change
+node_modules/async
+
+3 vulnerabilities (2 moderate, 1 high)
+
+To address issues that do not require attention, run:
+  npm audit fix
+
+To address all issues (including breaking changes), run:
+  npm audit fix --force
+"""
+expected = "lodash  <=4.17.20\nSeverity: high\nPrototype Pollution in lodash\nasync  <2.6.4\nSeverity: high\nPrototype Pollution in async\n3 vulnerabilities (2 moderate, 1 high)"
+
+[[tests.npm-audit]]
+name = "single vuln preserved"
+input = """
+lodash  <=4.17.20
+Severity: high
+
+1 vulnerability (1 high)
+"""
+expected = "lodash  <=4.17.20\nSeverity: high\n1 vulnerability (1 high)"
