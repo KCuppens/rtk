@@ -488,4 +488,39 @@ CREATE INDEX "session_status_idx" ON "Session"("status");
         assert_eq!(extract_number("42 models generated"), Some(42));
         assert_eq!(extract_number("no numbers here"), None);
     }
+
+    // --- Compressor filter: `prisma generate` output → 2-line summary.
+    //     Realistic input is heavy on ASCII-art boxes; the filter collapses
+    //     to a fixed-shape summary. Assert >=60% savings.
+
+    fn count_tokens_prisma(s: &str) -> usize {
+        s.split_whitespace().count()
+    }
+
+    #[test]
+    fn test_prisma_generate_savings_over_60_percent() {
+        // Realistic prisma generate blob with the promotional banner Prisma prints.
+        let input = "Environment variables loaded from .env\n\
+                     Prisma schema loaded from prisma/schema.prisma\n\n\
+                     ┌────────────────────────────────────────────────────────────────┐\n\
+                     │  Update available 5.10.0 -> 5.14.0                             │\n\
+                     │  Run the following to update                                    │\n\
+                     │    npm i --save-dev prisma@latest                               │\n\
+                     │    npm i @prisma/client@latest                                  │\n\
+                     └────────────────────────────────────────────────────────────────┘\n\n\
+                     ✔ Generated Prisma Client (v5.10.0) to ./node_modules/@prisma/client in 342ms\n\n\
+                     Start by importing your Prisma Client (See: https://pris.ly/d/importing-client)\n\
+                     Tip: Interested in real-time updates to your database? Subscribe:\n\
+                     https://pris.ly/tip-0-pulse\n\n\
+                     12 models generated\n\
+                     3 enums generated\n\
+                     1 type generated\n";
+        let output = filter_prisma_generate(input);
+        let savings = 100.0
+            - (count_tokens_prisma(&output) as f64 / count_tokens_prisma(input) as f64 * 100.0);
+        assert!(
+            savings >= 60.0,
+            "prisma generate filter: expected >=60% savings, got {savings:.1}%"
+        );
+    }
 }

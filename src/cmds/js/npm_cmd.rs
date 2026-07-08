@@ -234,4 +234,33 @@ npm notice
         let result = filter_npm_output(output);
         assert_eq!(result, "ok");
     }
+
+    // --- Compressor filter: assert >=60% token savings on realistic noisy npm output.
+
+    fn count_tokens(s: &str) -> usize {
+        s.split_whitespace().count()
+    }
+
+    #[test]
+    fn test_npm_savings_over_60_percent() {
+        let mut input = String::from("\n> project@1.0.0 build\n> next build\n\n");
+        // A noisy install-ish blob: 30 WARN + 10 notice + progress + one real signal.
+        for i in 0..30 {
+            input.push_str(&format!(
+                "npm WARN deprecated pkg-{i}@1.2.3: This module is not supported\n"
+            ));
+        }
+        for _ in 0..10 {
+            input.push_str("npm notice A new release of npm is available: 10.5.0\n");
+        }
+        input.push_str("...\n...\n");
+        input.push_str("   Creating an optimized production build...\n");
+        input.push_str("   ✓ Build completed in 42.3s\n");
+        let output = filter_npm_output(&input);
+        let savings = 100.0 - (count_tokens(&output) as f64 / count_tokens(&input) as f64 * 100.0);
+        assert!(
+            savings >= 60.0,
+            "npm filter: expected >=60% savings, got {savings:.1}%"
+        );
+    }
 }

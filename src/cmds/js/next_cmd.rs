@@ -225,4 +225,40 @@ Route (app)                    Size     First Load JS
         );
         assert_eq!(extract_time("No time here"), None);
     }
+
+    // --- Compressor filter: assert >=60% savings on realistic build output.
+
+    fn count_tokens(s: &str) -> usize {
+        s.split_whitespace().count()
+    }
+
+    #[test]
+    fn test_next_savings_over_60_percent() {
+        let mut input = String::from(
+            "   ▲ Next.js 15.2.0\n\n   Creating an optimized production build ...\n\
+             ✓ Compiled successfully\n✓ Linting and checking validity of types\n\
+             ✓ Collecting page data\n✓ Generating static pages (30/30)\n\
+             ✓ Finalizing page optimization\n\n\
+             Route (app)                                Size     First Load JS\n\
+             ┌ ○ /                                      1.2 kB        132 kB\n",
+        );
+        for i in 0..25 {
+            input.push_str(&format!(
+                "├ ○ /pages/section{i}/route                     {}.{i} kB        {} kB\n",
+                i + 1,
+                140 + i
+            ));
+        }
+        input.push_str("└ ● /dashboard                             2.5 kB        156 kB\n\n");
+        input.push_str("○  (Static)  prerendered as static content\n");
+        input.push_str("●  (SSG)     prerendered as static HTML\n");
+        input.push_str("λ  (Server)  server-side renders at runtime\n\n");
+        input.push_str("✓ Built in 34.2s\n");
+        let output = filter_next_build(&input);
+        let savings = 100.0 - (count_tokens(&output) as f64 / count_tokens(&input) as f64 * 100.0);
+        assert!(
+            savings >= 60.0,
+            "next build filter: expected >=60% savings, got {savings:.1}%"
+        );
+    }
 }
