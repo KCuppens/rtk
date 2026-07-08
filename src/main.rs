@@ -940,6 +940,12 @@ enum GitCommands {
         #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
         args: Vec<String>,
     },
+    /// Checkout with condensed output — collapses fast-forward diffstat, keeps errors
+    Checkout {
+        /// Git checkout arguments (branch, -b <name>, -- <paths>, etc.)
+        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+        args: Vec<String>,
+    },
     /// Passthrough: runs any unsupported git subcommand directly
     #[command(external_subcommand)]
     Other(Vec<OsString>),
@@ -1715,6 +1721,13 @@ fn run_cli() -> Result<i32> {
                 )?,
                 GitCommands::Stash { subcommand, args } => git::run(
                     git::GitCommand::Stash { subcommand },
+                    &args,
+                    None,
+                    cli.verbose,
+                    &global_args,
+                )?,
+                GitCommands::Checkout { args } => git::run(
+                    git::GitCommand::Checkout,
                     &args,
                     None,
                     cli.verbose,
