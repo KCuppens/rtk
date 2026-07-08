@@ -1,4 +1,5 @@
 ---
+model: haiku
 description: Generate a comprehensive repo recap (PRs, issues, releases) for sharing with team. Pass "en" or "fr" as argument for language (default fr).
 allowed-tools: Bash Read Grep
 ---

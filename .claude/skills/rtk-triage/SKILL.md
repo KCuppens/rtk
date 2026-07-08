@@ -1,5 +1,6 @@
 ---
 name: rtk-triage
+model: sonnet
 description: >
   Triage complet RTK : exécute issue-triage + pr-triage en parallèle,
   puis croise les données pour détecter doubles couvertures, trous sécurité,

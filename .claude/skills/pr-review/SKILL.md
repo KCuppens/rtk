@@ -1,4 +1,5 @@
 ---
+model: opus
 description: >
   Batch review des PRs RTK par ordre de complexité croissante (XS → S → M → L).
   Pour chaque PR : vérifie l'état (conflits, CLA, reviews), lit le diff complet,

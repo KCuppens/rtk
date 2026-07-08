@@ -1,5 +1,6 @@
 ---
 name: design-patterns
+model: sonnet
 description: Rust design patterns for RTK. Newtype, Builder, RAII, Trait Objects, State Machine. Applied to CLI filter modules. Use when designing new modules or refactoring existing ones.
 triggers:
   - "design pattern"

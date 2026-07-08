@@ -1,5 +1,6 @@
 ---
 name: code-simplifier
+model: opus
 description: Review RTK Rust code for idiomatic simplification. Detects over-engineering, unnecessary allocations, verbose patterns. Applies Rust idioms without changing behavior.
 triggers:
   - "simplify"

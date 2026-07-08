@@ -1,4 +1,5 @@
 ---
+model: sonnet
 description: CLI performance optimization - startup time, memory usage, token savings benchmarking
 ---
 

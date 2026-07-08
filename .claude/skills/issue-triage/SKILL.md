@@ -1,5 +1,6 @@
 ---
 name: issue-triage
+model: sonnet
 description: >
   Issue triage: audit open issues, categorize, detect duplicates, cross-ref PRs, risk assessment, post comments.
   Args: "all" for deep analysis of all, issue numbers to focus (e.g. "42 57"), "en"/"fr" for language, no arg = audit only in French.
@@ -254,6 +255,12 @@ prompt: |
   ### Draft Comment
   Draft a GitHub comment in English using the appropriate template from templates/issue-comment.md.
   Be specific, helpful, and constructive.
+
+  **Cap the entire response at ~350 words** (excluding the draft comment
+  itself, which follows the template). Use bullets in the analysis
+  sections — no paragraphs. Skip any section where there's nothing
+  substantive to say (e.g., "no security risk"). Parallel invocations
+  fan out — verbose analyses × N issues bloat main context fast.
 ```
 
 Si issue a >50 commentaires, résumer les 5 derniers uniquement.

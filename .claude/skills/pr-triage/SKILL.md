@@ -1,5 +1,6 @@
 ---
 name: pr-triage
+model: sonnet
 description: >
   PR triage: audit open PRs, deep review selected ones, draft and post review comments.
   Args: "all" to review all, PR numbers to focus (e.g. "42 57"), "en"/"fr" for language, no arg = audit only in French.
@@ -238,6 +239,10 @@ prompt: |
   ### What's Good ✅
 
   Be specific: quote the file:line, explain why it's an issue, suggest the fix.
+
+  **Cap the entire response at ~400 words.** Use bullets, not paragraphs.
+  Skip categories that have no findings — don't emit empty headers.
+  Parallel invocations mean 5 PRs × verbose reviews = 5× main-context bloat.
 ```
 
 Récupérer le diff via :
