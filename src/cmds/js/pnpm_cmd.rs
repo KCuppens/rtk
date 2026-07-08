@@ -674,4 +674,36 @@ mod tests {
         assert!(!react.dev_dependency, "react should be prod");
         assert!(eslint.dev_dependency, "eslint should be dev");
     }
+
+    // --- Compressor filter: pnpm install output → summary. Assert >=60% savings.
+
+    fn count_tokens_pnpm(s: &str) -> usize {
+        s.split_whitespace().count()
+    }
+
+    #[test]
+    fn test_pnpm_install_savings_over_60_percent() {
+        let mut input = String::from("Lockfile is up to date, resolution step is skipped\n");
+        // Progress spam
+        for i in 0..30 {
+            input.push_str(&format!(
+                "Progress: resolved {i}, reused {i}, downloaded 0, added 0 │ ▓▓▓░ 60%\n"
+            ));
+        }
+        input.push_str("\n");
+        // A handful of + and - lines (the real signal).
+        for i in 0..5 {
+            input.push_str(&format!("+ pkg-{i}@1.0.{i}\n"));
+        }
+        input.push_str("Progress: resolved 250, reused 240, downloaded 10, added 5 │ done\n");
+        input.push_str("Packages: +5\n");
+        input.push_str("250 packages in 3.4s. 240 dependencies from lockfile.\n");
+        let output = filter_pnpm_install(&input);
+        let savings =
+            100.0 - (count_tokens_pnpm(&output) as f64 / count_tokens_pnpm(&input) as f64 * 100.0);
+        assert!(
+            savings >= 60.0,
+            "pnpm install filter: expected >=60% savings, got {savings:.1}%"
+        );
+    }
 }

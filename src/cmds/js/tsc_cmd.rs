@@ -293,6 +293,39 @@ src/app.tsx(20,5): error TS2345: Argument of type 'number' is not assignable to 
         assert!(result.contains("No errors found"));
     }
 
+    // --- Structural test: tsc is an error-surfacer (transforms noise into a
+    //     structured error report), not an output-compressor. The correctness
+    //     signal is the summary shape + file paths preserved, not >=60% savings.
+
+    #[test]
+    fn test_tsc_error_surface_structure() {
+        let mut input = String::new();
+        for f in 0..6 {
+            for i in 0..5 {
+                let line = 10 + i * 4;
+                input.push_str(&format!(
+                    "src/module{f}/file{f}.ts({line},5): error TS2322: Type 'string' is not assignable to type 'number'.\n"
+                ));
+            }
+        }
+        input.push_str("\nFound 30 errors in 6 files.\n");
+        let output = filter_tsc_output(&input);
+        // Summary line
+        assert!(
+            output.contains("30 errors in 6 files"),
+            "missing summary, got: {output}"
+        );
+        // Every file path preserved (so callers can locate errors).
+        for f in 0..6 {
+            assert!(
+                output.contains(&format!("file{f}.ts")),
+                "file{f}.ts missing, got: {output}"
+            );
+        }
+        // Top error codes rolled up.
+        assert!(output.contains("TS2322"), "missing TS2322, got: {output}");
+    }
+
     // --- Streaming handler tests ---
 
     use crate::core::stream::tests::run_block_filter;

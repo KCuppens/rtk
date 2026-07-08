@@ -705,4 +705,38 @@ mod tests {
         assert!(!is_python_linter("biome"));
         assert!(!is_python_linter("unknown"));
     }
+
+    // --- ESLint is an error-surfacer. Structural test rather than % savings:
+    //     verify summary shape + file paths preserved so the caller can locate
+    //     issues. Savings vary widely with the ratio of rules-triggered per file.
+
+    #[test]
+    fn test_lint_eslint_error_surface_structure() {
+        // 4 files × ~3 issues each — realistic mid-sized project shape.
+        let json = r#"[
+            {"filePath":"/src/a.ts","messages":[
+                {"ruleId":"prefer-const","severity":1,"message":"Use const","line":1,"column":1},
+                {"ruleId":"prefer-const","severity":1,"message":"Use const","line":2,"column":1}
+            ],"errorCount":0,"warningCount":2},
+            {"filePath":"/src/b.ts","messages":[
+                {"ruleId":"no-unused-vars","severity":2,"message":"x unused","line":3,"column":1}
+            ],"errorCount":1,"warningCount":0},
+            {"filePath":"/src/c.ts","messages":[
+                {"ruleId":"no-unused-vars","severity":2,"message":"y unused","line":4,"column":1}
+            ],"errorCount":1,"warningCount":0},
+            {"filePath":"/src/d.ts","messages":[
+                {"ruleId":"prefer-const","severity":1,"message":"Use const","line":5,"column":1}
+            ],"errorCount":0,"warningCount":1}
+        ]"#;
+        let result = filter_eslint_json(json);
+        assert!(result.contains("ESLint:"), "missing header, got: {result}");
+        // File paths visible so the LLM can navigate.
+        assert!(result.contains("a.ts"));
+        assert!(result.contains("b.ts"));
+        assert!(result.contains("c.ts"));
+        assert!(result.contains("d.ts"));
+        // Rule names visible.
+        assert!(result.contains("prefer-const"));
+        assert!(result.contains("no-unused-vars"));
+    }
 }
