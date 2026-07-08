@@ -1,0 +1,50 @@
+[filters.bru]
+description = "Compact Bruno CLI (bru run) output — strip blank lines and progress banners, keep results"
+match_command = "^(pnpm\\s+|yarn\\s+|npm\\s+run\\s+)?(bru|@usebruno/cli)\\s+run\\b"
+strip_ansi = true
+strip_lines_matching = [
+  "^\\s*$",
+  "^Running Folder Recursively",
+  "^Running Request:",
+  "^Test Suite:",
+  "^Preparing Request",
+  "^Sending Request",
+  "^Received Response",
+  "^Executing Post Response",
+]
+truncate_lines_at = 200
+max_lines = 80
+on_empty = "bru: ok"
+
+[[tests.bru]]
+name = "strips progress banners, keeps request results and summary"
+input = """
+Running Folder Recursively
+Test Suite: users
+
+  Get user
+     ✓ 200 OK
+     ✓ Response body contains id
+
+  Create user
+     ✓ 201 Created
+
+Requests:    2 passed, 0 failed
+Tests:       3 passed, 0 failed
+Total time:  0.842 s
+"""
+expected = "  Get user\n     ✓ 200 OK\n     ✓ Response body contains id\n  Create user\n     ✓ 201 Created\nRequests:    2 passed, 0 failed\nTests:       3 passed, 0 failed\nTotal time:  0.842 s"
+
+[[tests.bru]]
+name = "preserves failures"
+input = """
+Running Folder Recursively
+
+  Get user
+     ✗ AssertionError: expected 200 to equal 404
+
+Requests:    1 passed, 0 failed
+Tests:       0 passed, 1 failed
+Total time:  0.342 s
+"""
+expected = "  Get user\n     ✗ AssertionError: expected 200 to equal 404\nRequests:    1 passed, 0 failed\nTests:       0 passed, 1 failed\nTotal time:  0.342 s"
