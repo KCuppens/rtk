@@ -1133,4 +1133,37 @@ utils.go:15:5: unreachable code"#;
         assert!(!has_golangci_format_flag(&os(&[])));
         assert!(!has_golangci_format_flag(&os(&["--fix"])));
     }
+
+    // --- Compressor: go build/vet output → summary + errors.
+
+    fn count_tokens_go(s: &str) -> usize {
+        s.split_whitespace().count()
+    }
+
+    #[test]
+    fn test_filter_go_build_savings_over_60_percent() {
+        // Realistic go build with lots of "downloading" chatter and a
+        // handful of compile errors.
+        let mut input = String::new();
+        for i in 0..30 {
+            input.push_str(&format!(
+                "go: downloading github.com/some-org/pkg-{i} v1.{i}.0\n"
+            ));
+        }
+        for i in 0..15 {
+            input.push_str(&format!(
+                "go: extracting github.com/some-org/pkg-{i} v1.{i}.0\n"
+            ));
+        }
+        input.push_str("# example.com/foo\n");
+        input.push_str("main.go:10:5: undefined: missingFunc\n");
+        input.push_str("main.go:15:2: cannot use x (type int) as type string\n");
+        let output = filter_go_build(&input);
+        let savings =
+            100.0 - (count_tokens_go(&output) as f64 / count_tokens_go(&input) as f64 * 100.0);
+        assert!(
+            savings >= 60.0,
+            "go build filter: expected >=60% savings, got {savings:.1}%"
+        );
+    }
 }

@@ -51,4 +51,34 @@ mod tests {
         assert!(!filtered.contains("PHPUnit 12.2.0"));
         assert!(filtered.contains("OK (4 tests, 4 assertions)"));
     }
+
+    // --- Structural: artisan cleanup strips ANSI, box-drawing chars, and
+    //     collapses dots/blanks. Byte-level compression rather than token-level,
+    //     so use a byte-savings assertion (>=40% of raw bytes).
+
+    #[test]
+    fn test_artisan_cleanup_byte_savings_over_40_percent() {
+        let mut input = String::new();
+        for _ in 0..30 {
+            input.push_str(
+                "\u{2502} \u{1b}[32mEnvironment \u{1b}[0m\u{2502} local ...................... \u{2502}\n",
+            );
+        }
+        input.push_str("\n\n\n\n\n");
+        for _ in 0..10 {
+            input.push_str(
+                "\u{2502} Laravel Version \u{2502}\u{1b}[32m 13.0.0 \u{1b}[0m\u{2502}\n",
+            );
+        }
+        let output = filter_artisan_output(&input);
+        // ANSI and box chars must be gone.
+        assert!(!output.contains('\u{1b}'), "ANSI code leaked");
+        assert!(!output.contains('\u{2502}'), "box char leaked");
+        // Byte-level savings: a heavily-decorated input should shrink noticeably.
+        let byte_savings = 100.0 - (output.len() as f64 / input.len() as f64 * 100.0);
+        assert!(
+            byte_savings >= 40.0,
+            "artisan filter: expected >=40% byte savings, got {byte_savings:.1}%"
+        );
+    }
 }
