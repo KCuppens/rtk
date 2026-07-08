@@ -29,6 +29,7 @@ pub enum GitCommand {
     Fetch,
     Stash { subcommand: Option<String> },
     Worktree,
+    Checkout,
 }
 
 /// Create a git Command with global options (e.g. -C, -c, --git-dir, --work-tree)
@@ -103,6 +104,7 @@ pub fn run(
             run_stash(subcommand.as_deref(), args, verbose, global_args)
         }
         GitCommand::Worktree => run_worktree(args, verbose, global_args),
+        GitCommand::Checkout => run_checkout(args, verbose, global_args),
     }
 }
 
@@ -1898,6 +1900,108 @@ fn filter_worktree_list(output: &str) -> String {
 }
 
 /// Runs an unsupported git subcommand by passing it through directly
+/// Compress `git checkout` output. On a plain branch switch git prints one or
+/// two lines; on a checkout that also fast-forwards it prints a full diffstat
+/// which can span dozens of lines. LLMs don't need the per-file diffstat — the
+/// summary line is enough.
+fn run_checkout(args: &[String], verbose: u8, global_args: &[String]) -> Result<i32> {
+    let timer = tracking::TimedExecution::start();
+    let mut cmd = git_cmd(global_args);
+    cmd.arg("checkout");
+    for arg in args {
+        cmd.arg(arg);
+    }
+
+    let result = exec_capture(&mut cmd).context("Failed to run git checkout")?;
+    let raw = result.combined();
+    let filtered = filter_checkout_output(&raw);
+    let filtered = never_worse(&raw, &filtered).to_string();
+
+    if verbose > 0 {
+        eprintln!("git checkout output:");
+    }
+    println!("{}", filtered);
+
+    timer.track(
+        &format!("git checkout {}", args.join(" ")),
+        &format!("rtk git checkout {}", args.join(" ")),
+        &raw,
+        &filtered,
+    );
+
+    if !result.success() {
+        return Ok(result.exit_code);
+    }
+    Ok(0)
+}
+
+/// Filter checkout output: keep switch/creation confirmation and errors,
+/// collapse fast-forward diffstat blocks to their summary line.
+pub(crate) fn filter_checkout_output(output: &str) -> String {
+    if output.trim().is_empty() {
+        return "git checkout: ok".to_string();
+    }
+    let mut kept: Vec<String> = Vec::new();
+    let mut in_diffstat = false;
+    let mut diffstat_files = 0usize;
+    for raw_line in output.lines() {
+        let line = raw_line.trim_end_matches('\r');
+        let trimmed = line.trim();
+
+        // Fast-forward diffstat detection: lines like " path/to/file | N +--"
+        // between "Fast-forward" and "N files changed, ..."
+        let looks_like_diffstat_file =
+            trimmed.contains(" | ") && trimmed.matches('|').count() == 1;
+        let looks_like_diffstat_summary =
+            trimmed.contains(" file changed") || trimmed.contains(" files changed");
+
+        if trimmed == "Fast-forward" {
+            in_diffstat = true;
+            diffstat_files = 0;
+            kept.push(line.to_string());
+            continue;
+        }
+        if in_diffstat && looks_like_diffstat_file {
+            diffstat_files += 1;
+            continue;
+        }
+        if in_diffstat && looks_like_diffstat_summary {
+            kept.push(line.to_string());
+            in_diffstat = false;
+            diffstat_files = 0;
+            continue;
+        }
+        if in_diffstat && trimmed.is_empty() {
+            continue;
+        }
+        // Exiting diffstat because we saw something unrelated: emit the count.
+        if in_diffstat {
+            if diffstat_files > 0 {
+                kept.push(format!("  [+{} files in diffstat omitted]", diffstat_files));
+            }
+            in_diffstat = false;
+            diffstat_files = 0;
+        }
+
+        // Common noise we drop unconditionally
+        if trimmed.is_empty()
+            || trimmed.starts_with("Previous HEAD position was")
+            || trimmed.starts_with("HEAD is now at")
+            || trimmed.starts_with("Your branch is up to date")
+        {
+            continue;
+        }
+        kept.push(line.to_string());
+    }
+    if in_diffstat && diffstat_files > 0 {
+        kept.push(format!("  [+{} files in diffstat omitted]", diffstat_files));
+    }
+    if kept.is_empty() {
+        return "git checkout: ok".to_string();
+    }
+    kept.join("\n")
+}
+
 pub fn run_passthrough(args: &[OsString], global_args: &[String], verbose: u8) -> Result<i32> {
     let timer = tracking::TimedExecution::start();
 
@@ -2811,6 +2915,82 @@ no changes added to commit (use "git add" and/or "git commit -a")
         assert!(!has_stat_family_flag(&["-10".into()]));
         assert!(!has_stat_family_flag(&["--oneline".into()]));
         assert!(!has_stat_family_flag(&[]));
+    }
+
+    // --- git checkout filter ---
+
+    #[test]
+    fn test_checkout_plain_switch_kept() {
+        let raw = "Switched to branch 'main'\nYour branch is up to date with 'origin/main'.\n";
+        let out = filter_checkout_output(raw);
+        assert!(out.contains("Switched to branch 'main'"));
+        // Verbose "up to date" line is dropped as noise.
+        assert!(!out.contains("Your branch is up to date"));
+    }
+
+    #[test]
+    fn test_checkout_new_branch_kept() {
+        let raw = "Switched to a new branch 'feat/foo'\n";
+        let out = filter_checkout_output(raw);
+        assert_eq!(out, "Switched to a new branch 'feat/foo'");
+    }
+
+    #[test]
+    fn test_checkout_fast_forward_diffstat_collapsed() {
+        let raw = "Switched to branch 'main'\n\
+                   Updating abc1234..def5678\n\
+                   Fast-forward\n\
+                   \x20src/a.rs         | 12 ++++--\n\
+                   \x20src/b.rs         |  8 ++-\n\
+                   \x20src/c.rs         |  4 +-\n\
+                   \x20src/nested/mod.rs | 20 +++++\n\
+                   \x204 files changed, 30 insertions(+), 6 deletions(-)\n";
+        let out = filter_checkout_output(raw);
+        assert!(out.contains("Switched to branch 'main'"));
+        assert!(out.contains("Fast-forward"));
+        assert!(out.contains("4 files changed"));
+        // Per-file diffstat lines are gone.
+        assert!(!out.contains("src/a.rs"));
+        assert!(!out.contains("src/b.rs"));
+        assert!(!out.contains("src/nested/mod.rs"));
+    }
+
+    #[test]
+    fn test_checkout_empty_stdout_returns_ok() {
+        assert_eq!(filter_checkout_output(""), "git checkout: ok");
+        assert_eq!(filter_checkout_output("\n\n"), "git checkout: ok");
+    }
+
+    #[test]
+    fn test_checkout_error_preserved() {
+        let raw = "error: Your local changes to the following files would be overwritten by checkout:\n\
+                   \tsrc/a.rs\n\
+                   Please commit your changes or stash them before you switch branches.\n\
+                   Aborting\n";
+        let out = filter_checkout_output(raw);
+        assert!(out.contains("error"));
+        assert!(out.contains("src/a.rs"));
+        assert!(out.contains("Aborting"));
+    }
+
+    #[test]
+    fn test_checkout_savings_over_60_percent() {
+        // Realistic fast-forward with 20 files.
+        let mut raw = String::from("Switched to branch 'main'\n\
+                                    Updating abc1234..def5678\n\
+                                    Fast-forward\n");
+        for i in 0..20 {
+            raw.push_str(&format!(" src/module{i}/component{i}.rs | 15 ++++++++++++---\n"));
+        }
+        raw.push_str("20 files changed, 240 insertions(+), 60 deletions(-)\n");
+        let filtered = filter_checkout_output(&raw);
+        let input_words = raw.split_whitespace().count();
+        let out_words = filtered.split_whitespace().count();
+        let savings = 100.0 - (out_words as f64 / input_words as f64 * 100.0);
+        assert!(
+            savings >= 60.0,
+            "checkout filter: expected >=60% savings, got {savings:.1}%"
+        );
     }
 
     /// Regression test: `git branch <name>` must create, not list.
