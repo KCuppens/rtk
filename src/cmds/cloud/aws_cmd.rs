@@ -767,7 +767,14 @@ fn filter_logs_events(json_str: &str) -> Option<FilterResult> {
     // Emit buckets sorted by count (desc), then by first-seen order for
     // deterministic ties.
     let mut sorted: Vec<Bucket> = buckets.into_values().collect();
-    sorted.sort_by_key(|b| std::cmp::Reverse(b.count));
+    // Sort by count desc, then by first-seen timestamp asc so equal-count
+    // buckets have a deterministic order (avoids HashMap-iteration flakiness
+    // observed in test_snapshot_logs_events_format).
+    sorted.sort_by(|a, b| {
+        b.count
+            .cmp(&a.count)
+            .then_with(|| a.first_time.cmp(&b.first_time))
+    });
     let unique = sorted.len();
 
     let mut lines = Vec::with_capacity(sorted.len() + 2);
