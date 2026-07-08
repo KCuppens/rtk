@@ -289,6 +289,28 @@ fn is_install_subcommand(args: &[String]) -> bool {
     matches!(args.first().map(String::as_str), Some("install") | Some("install-deps"))
 }
 
+/// Expands `rtk playwright debug [spec…]` into a fully-flagged `test` invocation
+/// with maximum-signal artifact capture. Debug flags come FIRST so any explicit
+/// user overrides in the tail take precedence (Playwright last-wins CLI flags).
+///
+/// Preset:
+/// - `--trace=on` — full trace zip (DOM, network, console, video, screenshots)
+/// - `--video=on` — standalone .webm (redundant with trace but easier to share)
+/// - `--screenshot=only-on-failure` — always cheap, always useful
+/// - `--workers=1 --retries=0` — deterministic single-run for debugging
+fn expand_debug_args(args: &[String]) -> Vec<String> {
+    let mut out = vec![
+        "test".to_string(),
+        "--trace=on".to_string(),
+        "--video=on".to_string(),
+        "--screenshot=only-on-failure".to_string(),
+        "--workers=1".to_string(),
+        "--retries=0".to_string(),
+    ];
+    out.extend(args.iter().skip(1).cloned());
+    out
+}
+
 /// Compress `playwright install` progress output.
 ///
 /// Playwright's install command dumps hundreds of lines of download progress
@@ -504,6 +526,45 @@ fn trim_stack(stack: &str) -> String {
     kept.join("\n")
 }
 
+/// In `debug` mode, append copy-paste `show-trace` commands so the user can
+/// jump straight from the failure block into the Playwright trace viewer.
+/// One line per unique trace.zip surfaced above.
+fn append_debug_helpers(out: &mut String, json: &PlaywrightJsonOutput) {
+    let mut traces: Vec<String> = Vec::new();
+    let mut seen: HashSet<String> = HashSet::new();
+    collect_trace_paths(&json.suites, &mut traces, &mut seen);
+    if traces.is_empty() {
+        return;
+    }
+    out.push_str("\n── debug helpers ──\n");
+    for path in &traces {
+        out.push_str(&format!("   npx playwright show-trace {}\n", path));
+    }
+}
+
+fn collect_trace_paths(suites: &[PlaywrightSuite], out: &mut Vec<String>, seen: &mut HashSet<String>) {
+    for suite in suites {
+        for spec in &suite.specs {
+            if !spec.ok {
+                for exec in &spec.tests {
+                    for r in &exec.results {
+                        for a in &r.attachments {
+                            if a.name == "trace" {
+                                if let Some(p) = &a.path {
+                                    if seen.insert(p.clone()) {
+                                        out.push(p.clone());
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        collect_trace_paths(&suite.suites, out, seen);
+    }
+}
+
 /// Playwright's `snippet` field is a multi-line code excerpt with `>` marking
 /// the failure line. Keep ±2 lines around the marker; if no marker, keep the
 /// first 5 lines as a defensive fallback.
@@ -544,18 +605,26 @@ pub fn run(args: &[String], verbose: u8) -> Result<i32> {
         }
     };
 
-    let is_test = args.first().map(|a| a == "test").unwrap_or(false);
-    let is_install = is_install_subcommand(args);
-    let honor_user_reporter = is_test && user_set_reporter(args);
+    // Expand `debug` into a fully-flagged `test` invocation before routing.
+    let is_debug = args.first().map(|a| a == "debug").unwrap_or(false);
+    let effective_args: Vec<String> = if is_debug {
+        expand_debug_args(args)
+    } else {
+        args.to_vec()
+    };
+
+    let is_test = effective_args.first().map(|a| a == "test").unwrap_or(false);
+    let is_install = is_install_subcommand(&effective_args);
+    let honor_user_reporter = is_test && user_set_reporter(&effective_args);
 
     if is_test && !honor_user_reporter {
         cmd.arg("test");
         cmd.arg("--reporter=json");
-        for arg in &args[1..] {
+        for arg in &effective_args[1..] {
             cmd.arg(arg);
         }
     } else {
-        for arg in args {
+        for arg in &effective_args {
             cmd.arg(arg);
         }
     }
@@ -584,7 +653,11 @@ pub fn run(args: &[String], verbose: u8) -> Result<i32> {
                 if verbose > 0 {
                     eprintln!("playwright test (Tier 1: rich JSON parse)");
                 }
-                format_rich_output(&json)
+                let mut out = format_rich_output(&json);
+                if is_debug {
+                    append_debug_helpers(&mut out, &json);
+                }
+                out
             }
             Err(_) => {
                 // Fall back to the pre-existing Tier 2/3 pipeline.
@@ -938,6 +1011,87 @@ mod tests {
         let raw = "|                        | 0% of 10 MiB\n|====                    | 12% of 10 MiB";
         let out = filter_install(raw);
         assert!(!out.is_empty(), "must not return empty output");
+    }
+
+    #[test]
+    fn test_expand_debug_args_injects_flags_and_preserves_tail() {
+        let input = vec!["debug".to_string(), "tests/login.spec.ts".to_string()];
+        let out = expand_debug_args(&input);
+
+        assert_eq!(out[0], "test", "debug must rewrite to test subcommand");
+        assert!(out.contains(&"--trace=on".to_string()), "trace flag missing");
+        assert!(out.contains(&"--video=on".to_string()), "video flag missing");
+        assert!(
+            out.contains(&"--screenshot=only-on-failure".to_string()),
+            "screenshot flag missing"
+        );
+        assert!(out.contains(&"--workers=1".to_string()), "workers flag missing");
+        assert!(out.contains(&"--retries=0".to_string()), "retries flag missing");
+
+        // User's spec path preserved AFTER the debug flags so Playwright
+        // last-wins gives user args precedence.
+        let spec_idx = out.iter().position(|a| a == "tests/login.spec.ts").unwrap();
+        let trace_idx = out.iter().position(|a| a == "--trace=on").unwrap();
+        assert!(spec_idx > trace_idx, "user spec must appear after debug flags");
+    }
+
+    #[test]
+    fn test_expand_debug_args_user_override_wins() {
+        // If user passes --retries=2 after `debug`, Playwright's last-wins
+        // CLI parsing should let it override our --retries=0.
+        let input = vec!["debug".to_string(), "--retries=2".to_string()];
+        let out = expand_debug_args(&input);
+        let our_retries = out.iter().position(|a| a == "--retries=0").unwrap();
+        let user_retries = out.iter().position(|a| a == "--retries=2").unwrap();
+        assert!(user_retries > our_retries, "user override must come last");
+    }
+
+    #[test]
+    fn test_debug_appends_show_trace_hints() {
+        let input = include_str!("../../../tests/fixtures/playwright_test_failed_with_artifacts.json");
+        let json: PlaywrightJsonOutput = serde_json::from_str(input).expect("fixture must parse");
+        let mut out = format_rich_output(&json);
+        append_debug_helpers(&mut out, &json);
+
+        assert!(
+            out.contains("── debug helpers ──"),
+            "debug helpers section missing:\n{out}"
+        );
+        assert!(
+            out.contains("npx playwright show-trace test-results/auth-login-invalid/trace.zip"),
+            "primary trace command missing:\n{out}"
+        );
+        // Retry trace path also surfaced (distinct path → distinct command)
+        assert!(
+            out.contains("npx playwright show-trace test-results/auth-login-invalid-retry1/trace.zip"),
+            "retry trace command missing:\n{out}"
+        );
+    }
+
+    #[test]
+    fn test_debug_helpers_no_traces_no_section() {
+        // Build a synthetic PlaywrightJsonOutput with a failure but no trace
+        // attachment — helpers section should not appear.
+        let input = r#"{
+            "stats": {"expected": 0, "unexpected": 1, "skipped": 0, "duration": 100.0},
+            "suites": [{
+                "title": "s.spec.ts",
+                "specs": [{
+                    "title": "x",
+                    "ok": false,
+                    "tests": [{
+                        "status": "unexpected",
+                        "results": [{"status": "failed", "errors": [{"message": "boom"}]}]
+                    }]
+                }],
+                "suites": []
+            }],
+            "errors": []
+        }"#;
+        let json: PlaywrightJsonOutput = serde_json::from_str(input).expect("must parse");
+        let mut out = format_rich_output(&json);
+        append_debug_helpers(&mut out, &json);
+        assert!(!out.contains("debug helpers"), "helpers must be omitted when no traces exist");
     }
 
     #[test]
