@@ -453,22 +453,63 @@ fn collect_match_patterns() -> Vec<String> {
                 | crate::hooks::trust::TrustStatus::EnvOverride
         ) {
             if let Some(content) = content {
-                patterns.extend(match_patterns_in(&content));
+                let label = path.display().to_string();
+                patterns.extend(match_patterns_in_labeled(&content, Some(&label)));
             }
         }
     }
-    patterns.extend(match_patterns_in(BUILTIN_TOML));
+    patterns.extend(match_patterns_in_labeled(BUILTIN_TOML, None));
     patterns
 }
 
+/// Silent variant retained for tests that were written against it before
+/// [`match_patterns_in_labeled`] existed. Never call from production code —
+/// use the labeled variant so parse failures surface to the user.
+#[cfg(test)]
 fn match_patterns_in(content: &str) -> Vec<String> {
+    match_patterns_in_labeled(content, None)
+}
+
+/// Extract `match_command` patterns from a filter file's TOML content, with a
+/// stderr diagnostic when the file is silently skipped. Fixes #2883: previously
+/// a user filter with a missing/invalid `schema_version` — or any other parse
+/// failure — was dropped by the hook without any signal, so `rtk hook claude`
+/// would not auto-rewrite commands matched by that filter and the user had no
+/// way to see why.
+///
+/// `source` is included in the message when the file is on disk; pass `None`
+/// for the built-in embedded TOML where a parse failure would be a bug rather
+/// than user error.
+fn match_patterns_in_labeled(content: &str, source: Option<&str>) -> Vec<String> {
     match toml::from_str::<TomlFilterFile>(content) {
         Ok(file) if file.schema_version == 1 => file
             .filters
             .into_values()
             .map(|def| def.match_command)
             .collect(),
-        _ => Vec::new(),
+        Ok(file) => {
+            if let Some(source) = source {
+                eprintln!(
+                    "[rtk] WARNING: {} has schema_version = {} (expected 1); \
+                     filters in this file will be ignored by the hook. \
+                     Set `schema_version = 1` at the top of the file.",
+                    source, file.schema_version
+                );
+            }
+            Vec::new()
+        }
+        Err(e) => {
+            if let Some(source) = source {
+                eprintln!(
+                    "[rtk] WARNING: {} could not be parsed as a filter file ({}); \
+                     filters in this file will be ignored by the hook. \
+                     Ensure the file starts with `schema_version = 1` and each \
+                     `[filters.<name>]` block has a `match_command` field.",
+                    source, e
+                );
+            }
+            Vec::new()
+        }
     }
 }
 
@@ -850,6 +891,38 @@ mod tests {
         assert!(match_patterns_in(v2).is_empty());
 
         assert!(match_patterns_in("not valid toml {{{").is_empty());
+    }
+
+    // --- #2883: labeled variant emits diagnostics but agrees on the empty set.
+
+    #[test]
+    fn test_match_patterns_in_labeled_missing_schema_returns_empty() {
+        // No schema_version at all → toml::from_str fails on required field.
+        let missing = "[filters.a]\nmatch_command = \"^aaa\"\n";
+        assert!(match_patterns_in_labeled(missing, Some("/tmp/x.toml")).is_empty());
+    }
+
+    #[test]
+    fn test_match_patterns_in_labeled_wrong_schema_returns_empty() {
+        let wrong = "schema_version = 2\n[filters.a]\nmatch_command = \"^aaa\"\n";
+        assert!(match_patterns_in_labeled(wrong, Some("/tmp/x.toml")).is_empty());
+    }
+
+    #[test]
+    fn test_match_patterns_in_labeled_valid_returns_patterns() {
+        let v1 = "schema_version = 1\n[filters.a]\nmatch_command = \"^aaa\"\n";
+        assert_eq!(
+            match_patterns_in_labeled(v1, Some("/tmp/x.toml")),
+            vec!["^aaa".to_string()]
+        );
+    }
+
+    #[test]
+    fn test_match_patterns_in_labeled_no_source_stays_silent() {
+        // When source is None (BUILTIN_TOML path), no warning is emitted.
+        // Behavioral parity with match_patterns_in.
+        let bad = "not valid toml {{{";
+        assert!(match_patterns_in_labeled(bad, None).is_empty());
     }
 
     #[test]
